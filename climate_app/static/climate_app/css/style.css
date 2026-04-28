@@ -1,0 +1,299 @@
+/* ─── Reset & Base ─────────────────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg:           #f7f7f5;
+  --surface:      #ffffff;
+  --border:       rgba(0, 0, 0, 0.10);
+  --text:         #1a1a18;
+  --text-muted:   #6b6b67;
+  --accent:       #3266ad;
+  --accent-light: #e6f1fb;
+  --danger:       #e24b4a;
+  --danger-light: #fcebeb;
+  --success:      #1d9e75;
+  --success-light:#e1f5ee;
+  --warning:      #ba7517;
+  --warning-light:#faeeda;
+  --radius:       10px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:           #1c1c1a;
+    --surface:      #262622;
+    --border:       rgba(255, 255, 255, 0.10);
+    --text:         #e8e8e4;
+    --text-muted:   #9a9a96;
+    --accent-light: #0c447c;
+    --danger-light: #501313;
+    --success-light:#04342c;
+    --warning-light:#412402;
+  }
+}
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* ─── Header ────────────────────────────────────────────────────────────────── */
+.header {
+  background: var(--surface);
+  border-bottom: 0.5px solid var(--border);
+  padding: 1rem 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.header h1 {
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.header .subtitle {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* ─── Container ─────────────────────────────────────────────────────────────── */
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1.25rem;
+}
+
+/* ─── Stats grid ────────────────────────────────────────────────────────────── */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin-bottom: 1.25rem;
+}
+
+.stat-card {
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.85rem 1rem;
+}
+
+.stat-card .label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+
+.stat-card .value {
+  font-size: 22px;
+  font-weight: 500;
+}
+
+.stat-card .sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.stat-card.danger .value  { color: var(--danger); }
+.stat-card.success .value { color: var(--success); }
+
+/* ─── Controls bar ──────────────────────────────────────────────────────────── */
+.controls {
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.controls label {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+select,
+button {
+  font-family: inherit;
+  font-size: 13px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 0.5px solid var(--border);
+  cursor: pointer;
+  background: var(--surface);
+  color: var(--text);
+}
+
+button.primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  font-weight: 500;
+}
+
+button.primary:hover  { opacity: 0.88; }
+button.secondary:hover { background: var(--bg); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ─── Algo info box ─────────────────────────────────────────────────────────── */
+.algo-info {
+  background: var(--warning-light);
+  border: 0.5px solid rgba(186, 117, 23, 0.25);
+  border-radius: var(--radius);
+  padding: 0.85rem 1.1rem;
+  margin-bottom: 1.25rem;
+  font-size: 12px;
+  color: var(--warning);
+}
+
+.algo-info strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+
+/* ─── Chart panels ──────────────────────────────────────────────────────────── */
+.chart-panel {
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.25rem;
+}
+
+.chart-panel .panel-title {
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.panel-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+.chart-wrap {
+  position: relative;
+  width: 100%;
+  height: 260px;
+}
+
+/* ─── Candle container ──────────────────────────────────────────────────────── */
+#candle-container {
+  width: 100%;
+  overflow-x: auto;
+  position: relative;
+}
+
+/* ─── Legend ────────────────────────────────────────────────────────────────── */
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.legend span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.legend .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* ─── Badges ────────────────────────────────────────────────────────────────── */
+.badge {
+  display: inline-block;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.badge.danger  { background: var(--danger-light);  color: var(--danger); }
+.badge.success { background: var(--success-light); color: var(--success); }
+.badge.warning { background: var(--warning-light); color: var(--warning); }
+
+/* ─── Missing data table ────────────────────────────────────────────────────── */
+.table-wrap {
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.missing-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.missing-table th {
+  text-align: left;
+  padding: 6px 10px;
+  color: var(--text-muted);
+  font-weight: 500;
+  border-bottom: 0.5px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+}
+
+.missing-table td {
+  padding: 6px 10px;
+  border-bottom: 0.5px solid var(--border);
+}
+
+.missing-table tr:last-child td {
+  border-bottom: none;
+}
+
+/* ─── Loading spinner ───────────────────────────────────────────────────────── */
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255,255,255,0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ─── Responsive ────────────────────────────────────────────────────────────── */
+@media (max-width: 600px) {
+  .header { flex-direction: column; align-items: flex-start; }
+  .controls { flex-direction: column; align-items: flex-start; }
+  .stats-grid { grid-template-columns: 1fr 1fr; }
+}

@@ -1,0 +1,195 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Delhi Climate — Visualisasi &amp; Imputasi Data</title>
+
+  <!-- External: Chart.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+
+  <!-- App stylesheet -->
+  <link rel="stylesheet" href="{% static 'climate_app/css/style.css' %}">
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────────────────────── -->
+<div class="header">
+  <h1>Delhi Climate — Visualisasi Data Hilang &amp; Imputasi</h1>
+  <span class="subtitle">Dataset: Jan–Apr 2017 · {{ total_rows }} baris · 5 kolom</span>
+</div>
+
+<div class="container">
+
+  <!-- ── Summary cards ─────────────────────────────────────────────────── -->
+  <div class="stats-grid">
+
+    <div class="stat-card danger">
+      <div class="label">Total Nilai Hilang</div>
+      <div class="value">{{ total_missing }}</div>
+      <div class="sub">dari {{ total_rows|add:total_rows|add:total_rows|add:total_rows }} sel data</div>
+    </div>
+
+    <div class="stat-card danger">
+      <div class="label">Baris Terpengaruh</div>
+      <div class="value">{{ affected_rows }}</div>
+      <div class="sub">dari {{ total_rows }} baris</div>
+    </div>
+
+    <div class="stat-card">
+      <div class="label">Kolom Paling Hilang</div>
+      <div class="value" style="font-size:15px;padding-top:4px">{{ worst_col }}</div>
+      <div class="sub">{{ worst_count }} nilai hilang</div>
+    </div>
+
+    <!-- shown by JS after imputation -->
+    <div class="stat-card success" id="st-filled-card" style="display:none">
+      <div class="label">Nilai Terisi</div>
+      <div class="value" id="st-filled">0</div>
+      <div class="sub">menggunakan imputasi</div>
+    </div>
+
+  </div>
+
+  <!-- ── Missing per column (from Django context) ───────────────────────── -->
+  <div class="chart-panel" style="margin-bottom:1.25rem">
+    <div class="panel-title">Ringkasan Nilai Hilang per Kolom</div>
+    <table class="missing-table">
+      <thead>
+        <tr>
+          <th>Kolom</th>
+          <th>Jumlah Hilang</th>
+          <th>Persentase</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for col, count in missing_per_col.items %}
+        <tr>
+          <td>{{ col }}</td>
+          <td>{{ count }}</td>
+          <td>{% widthratio count total_rows 100 %}%</td>
+          <td>
+            {% if count == 0 %}
+              <span class="badge success">Lengkap</span>
+            {% elif count <= 5 %}
+              <span class="badge warning">Sedikit</span>
+            {% else %}
+              <span class="badge danger">Banyak</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ── Controls ──────────────────────────────────────────────────────── -->
+  <div class="controls">
+    <label for="col-select">Kolom:</label>
+    <select id="col-select">
+      <option value="meantemp">Mean Temperature (°C)</option>
+      <option value="humidity">Humidity (%)</option>
+      <option value="wind_speed" selected>Wind Speed (km/h)</option>
+      <option value="meanpressure">Mean Pressure (hPa)</option>
+    </select>
+
+    <label for="algo-select">Algoritma:</label>
+    <select id="algo-select">
+      {% for key, meta in algo_meta.items %}
+      <option value="{{ key }}">{{ meta.name }}</option>
+      {% endfor %}
+    </select>
+
+    <button class="primary" id="btn-fill">Isi Data Kosong</button>
+    <button class="secondary" id="btn-reset" disabled>Reset</button>
+  </div>
+
+  <!-- ── Algorithm description ─────────────────────────────────────────── -->
+  <div class="algo-info" id="algo-desc">
+    {# filled by JS on load #}
+  </div>
+
+  <!-- ── Candle chart ──────────────────────────────────────────────────── -->
+  <div class="chart-panel">
+    <div class="panel-title">
+      Candle Chart — Visualisasi Data Harian &amp; Data Hilang
+      <span class="badge danger"  id="missing-count-badge">? hilang</span>
+      <span class="badge success" id="filled-count-badge" style="display:none">? terisi</span>
+    </div>
+    <p class="panel-hint">
+      Setiap batang mewakili satu hari.
+      <strong>Merah</strong> = data hilang &nbsp;|&nbsp;
+      <strong>Hijau</strong> = nilai terisi (imputasi) &nbsp;|&nbsp;
+      Abu/biru = data normal.
+    </p>
+    <div id="candle-container"></div>
+    <div class="legend">
+      <span><span class="dot" style="background:rgba(113,113,108,.4)"></span>Data lengkap (turun)</span>
+      <span><span class="dot" style="background:rgba(50,102,173,.55)"></span>Data lengkap (naik)</span>
+      <span><span class="dot" style="background:rgba(226,75,74,.7)"></span>Data hilang</span>
+      <span><span class="dot" style="background:rgba(29,158,117,.8)"></span>Terisi (imputasi)</span>
+    </div>
+  </div>
+
+  <!-- ── Line chart ────────────────────────────────────────────────────── -->
+  <div class="chart-panel">
+    <div class="panel-title">Tren Deret Waktu — Sebelum &amp; Sesudah Imputasi</div>
+    <div class="chart-wrap">
+      <canvas id="lineChart"
+              role="img"
+              aria-label="Tren nilai kolom terpilih sebelum dan sesudah imputasi">
+        Grafik tren deret waktu data iklim Delhi.
+      </canvas>
+    </div>
+    <div class="legend" id="line-legend"></div>
+  </div>
+
+  <!-- ── Detail table ──────────────────────────────────────────────────── -->
+  <div class="chart-panel">
+    <div class="panel-title">
+      Detail Baris Data Hilang —
+      <span id="col-label-table">wind_speed</span>
+    </div>
+    <div class="table-wrap">
+      <table class="missing-table">
+        <thead>
+          <tr>
+            <th>Index</th>
+            <th>Tanggal</th>
+            <th>Nilai Asli</th>
+            <th>Nilai Imputasi</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="missing-tbody">
+          <tr>
+            <td colspan="5" style="color:var(--text-muted);text-align:center">
+              Memuat data…
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div><!-- /.container -->
+
+<!-- Algorithm metadata passed to JS -->
+<script>
+  const ALGO_META = {
+    {% for key, meta in algo_meta.items %}
+    "{{ key }}": {
+      name: "{{ meta.name }}",
+      desc: "{{ meta.desc|escapejs }}"
+    }{% if not forloop.last %},{% endif %}
+    {% endfor %}
+  };
+</script>
+
+<!-- App JS (must come after Chart.js and inline ALGO_META) -->
+<script src="{% static 'climate_app/js/main.js' %}"></script>
+
+</body>
+</html>

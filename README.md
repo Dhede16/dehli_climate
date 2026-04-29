@@ -73,15 +73,6 @@ Content-Type: application/json
 }
 ```
 
-## Algoritma Imputasi
+## Algoritma Imputasi Cubic Spline Interpolation
 
-Semua algoritma tersedia di `views.py` sebagai fungsi Python murni
-(tanpa scikit-learn), sehingga tidak ada dependensi tambahan.
-
-| Key          | Nama                          | Keterangan singkat                                  |
-|-------------|-------------------------------|-----------------------------------------------------|
-| `spline`     | Cubic Spline Interpolation    | Kurva kubik mulus antar titik diketahui             |
-| `seasonal`   | Dekomposisi Musiman           | Tren linear + pola musiman 7-hari                   |
-| `moving_avg` | Moving Average Tertimbang     | Rata-rata berbobot dari K tetangga terdekat         |
-| `regression` | Regresi Linear Lokal (LOESS)  | Regresi dalam jendela ±7 hari                       |
-| `knn`        | K-Nearest Neighbors           | Tetangga terdekat secara multivariat antar kolom    |
+Algoritma Imputasi Cubic Spline Interpolation adalah metode numerik untuk mengisi nilai data yang hilang (missing values) dengan cara membangun kurva mulus yang melewati titik-titik data yang diketahui. Metode ini menggunakan polinomial kubik piecewise (potongan-potongan) derajat tiga yang bergabung pada titik-titik data (knots), memastikan kelancaran turunan pertama dan kedua.

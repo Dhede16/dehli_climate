@@ -24,9 +24,9 @@ COLUMNS = ['meantemp', 'humidity', 'wind_speed', 'meanpressure']
 ALGO_NAME = 'Cubic Spline Interpolation'
 ALGO_DESC = (
     'Mengisi nilai kosong menggunakan kurva kubik yang mulus yang '
-    'menghubungkan titik-titik data yang diketahui. Berbeda dengan '
-    'forward/backward fill, metode ini mempertimbangkan nilai sebelum '
-    'DAN sesudah setiap titik kosong sehingga hasil interpolasi lebih '
+    'menghubungkan titik-titik data yang diketahui.'
+    ' Metode ini mempertimbangkan nilai sebelum '
+    'dan sesudah setiap titik kosong sehingga hasil interpolasi lebih '
     'alami dan akurat untuk data iklim deret waktu.'
 )
 

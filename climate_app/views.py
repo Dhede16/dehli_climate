@@ -1,308 +1,284 @@
-import json
+"""
+Delhi Climate — views.py
+Satu metode imputasi: Cubic Spline Interpolation.
+Endpoint:
+  GET  /             → halaman utama
+  GET  /api/data/    → data mentah JSON
+  POST /api/impute/  → imputasi semua kolom, return JSON
+  GET  /api/download/→ download Excel hasil imputasi
+"""
+
+import io
 import math
+
 import pandas as pd
-from django.shortcuts import render
-from django.http import JsonResponse
 from django.conf import settings
+from django.http import HttpResponse, JsonResponse
+from django.shortcuts import render
+from django.views.decorators.csrf import csrf_exempt
 
-
-# ─── Data loading ────────────────────────────────────────────────────────────
-
-def load_data():
-    """Load CSV and return list of dicts with None for NaN."""
-    df = pd.read_csv(settings.DATA_FILE)
-    records = df.to_dict(orient='records')
-    for row in records:
-        for k, v in row.items():
-            if isinstance(v, float) and math.isnan(v):
-                row[k] = None
-    return records
-
-
-# ─── Imputation algorithms ───────────────────────────────────────────────────
-
-def impute_cubic_spline(arr):
-    """
-    Cubic Hermite spline interpolation.
-    Fills gaps using smooth cubic curves fitted between known anchor points.
-    Considers values both before AND after each gap (unlike forward/backward fill).
-    """
-    n = len(arr)
-    known = [{'i': i, 'v': arr[i]} for i in range(n) if arr[i] is not None]
-    result = list(arr)
-
-    for k in range(len(known) - 1):
-        i0, v0 = known[k]['i'], known[k]['v']
-        i1, v1 = known[k + 1]['i'], known[k + 1]['v']
-        d = i1 - i0
-
-        m0 = ((known[k + 1]['v'] - known[k - 1]['v']) / (known[k + 1]['i'] - known[k - 1]['i'])
-              if k > 0 else (v1 - v0) / d)
-        m1 = ((known[k + 2]['v'] - known[k]['v']) / (known[k + 2]['i'] - known[k]['i'])
-              if k < len(known) - 2 else (v1 - v0) / d)
-
-        for x in range(i0 + 1, i1):
-            t = (x - i0) / d
-            h00 = 2*t**3 - 3*t**2 + 1
-            h10 = t**3 - 2*t**2 + t
-            h01 = -2*t**3 + 3*t**2
-            h11 = t**3 - t**2
-            result[x] = h00*v0 + h10*d*m0 + h01*v1 + h11*d*m1
-
-    # Edge padding
-    if known:
-        first, last = known[0], known[-1]
-        for i in range(first['i']):
-            result[i] = first['v']
-        for i in range(last['i'] + 1, n):
-            result[i] = last['v']
-
-    return result
-
-
-def impute_seasonal(arr):
-    """
-    Seasonal decomposition imputation.
-    Splits the series into trend (local linear regression) + seasonal component
-    (7-day period estimated from known values), then fills gaps with trend + seasonal.
-    """
-    n = len(arr)
-    known = [{'i': i, 'v': arr[i]} for i in range(n) if arr[i] is not None]
-    if len(known) < 2:
-        return list(arr)
-
-    xs = [p['i'] for p in known]
-    ys = [p['v'] for p in known]
-    mean_x = sum(xs) / len(xs)
-    mean_y = sum(ys) / len(ys)
-    num = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
-    den = sum((x - mean_x) ** 2 for x in xs) or 1
-    slope = num / den
-    intercept = mean_y - slope * mean_x
-
-    period = 7
-    seasonal = []
-    for p in range(period):
-        pts = [pt['v'] - (slope * pt['i'] + intercept) for pt in known if pt['i'] % period == p]
-        seasonal.append(sum(pts) / len(pts) if pts else 0.0)
-
-    result = list(arr)
-    for i in range(n):
-        if result[i] is None:
-            result[i] = slope * i + intercept + seasonal[i % period]
-    return result
-
-
-def impute_weighted_moving_avg(arr, k=5):
-    """
-    Weighted Moving Average (WMA).
-    Fills each gap with a distance-weighted average of the nearest K known
-    neighbours on both sides. Closer neighbours receive higher weight (1/distance).
-    """
-    result = list(arr)
-    for i in range(len(arr)):
-        if arr[i] is not None:
-            continue
-        numerator = denominator = 0.0
-        for j in range(max(0, i - k), min(len(arr), i + k + 1)):
-            if arr[j] is not None:
-                w = 1.0 / (abs(j - i) + 1)
-                numerator += arr[j] * w
-                denominator += w
-        if denominator > 0:
-            result[i] = numerator / denominator
-    return result
-
-
-def impute_loess(arr, radius=7):
-    """
-    Local Linear Regression (LOESS-like).
-    Fits a weighted linear model within a ±radius window around each gap.
-    Captures local trends without being influenced by distant data points.
-    """
-    result = list(arr)
-    for i in range(len(arr)):
-        if arr[i] is not None:
-            continue
-        lo, hi = max(0, i - radius), min(len(arr) - 1, i + radius)
-        pts = [{'j': j, 'v': arr[j]} for j in range(lo, hi + 1) if arr[j] is not None]
-        if len(pts) < 2:
-            if len(pts) == 1:
-                result[i] = pts[0]['v']
-            continue
-        mx = sum(p['j'] for p in pts) / len(pts)
-        my = sum(p['v'] for p in pts) / len(pts)
-        num = sum((p['j'] - mx) * (p['v'] - my) for p in pts)
-        den = sum((p['j'] - mx) ** 2 for p in pts) or 1
-        slope = num / den
-        result[i] = my + slope * (i - mx)
-    return result
-
-
-def impute_knn(data, col, k=5):
-    """
-    K-Nearest Neighbours (KNN) imputation.
-    Finds K most similar rows using all other numeric columns as features
-    (Euclidean distance in normalised feature space, blended with temporal proximity).
-    Fills the gap with a distance-weighted average of the K neighbours' values.
-    """
-    features = [c for c in ['meantemp', 'humidity', 'wind_speed', 'meanpressure'] if c != col]
-    result = [dict(row) for row in data]
-    missing_idx = [i for i, r in enumerate(data) if r[col] is None]
-    avail_idx   = [i for i, r in enumerate(data) if r[col] is not None]
-
-    def normalize(feature):
-        vals = [data[i][feature] for i in range(len(data)) if data[i][feature] is not None]
-        mn, mx = min(vals), max(vals)
-        rng = mx - mn or 1
-        return [(data[i][feature] - mn) / rng if data[i][feature] is not None else None
-                for i in range(len(data))]
-
-    norms = {f: normalize(f) for f in features}
-
-    for mi in missing_idx:
-        dists = []
-        for ai in avail_idx:
-            sq = cnt = 0
-            for f in features:
-                a, b = norms[f][ai], norms[f][mi]
-                if a is not None and b is not None:
-                    sq += (a - b) ** 2
-                    cnt += 1
-            feat_dist = math.sqrt(sq / cnt) if cnt else 1.0
-            pos_dist  = math.sqrt(((mi - ai) / len(data)) ** 2)
-            dists.append({'ai': ai, 'dist': feat_dist * 0.9 + pos_dist * 0.1})
-
-        dists.sort(key=lambda d: d['dist'])
-        neighbours = dists[:k]
-        total_w = sum(1 / (d['dist'] + 1e-6) for d in neighbours)
-        result[mi][col] = sum(data[d['ai']][col] / (d['dist'] + 1e-6)
-                              for d in neighbours) / total_w
-
-    return result
-
-
-# ─── Views ───────────────────────────────────────────────────────────────────
+# ── Konfigurasi ────────────────────────────────────────────────────────────────
 
 COLUMNS = ['meantemp', 'humidity', 'wind_speed', 'meanpressure']
 
-ALGO_META = {
-    'spline': {
-        'name': 'Cubic Spline Interpolation',
-        'desc': (
-            'Mengisi nilai kosong dengan menghubungkan titik-titik data yang ada '
-            'menggunakan kurva kubik yang mulus. Algoritma ini mempertahankan '
-            'kelancaran perubahan dan cocok untuk data deret waktu yang berubah '
-            'bertahap (suhu, tekanan). Berbeda dengan forward/backward fill, '
-            'metode ini mempertimbangkan nilai sebelum DAN sesudah titik kosong.'
-        ),
-    },
-    'seasonal': {
-        'name': 'Dekomposisi Musiman',
-        'desc': (
-            'Menguraikan deret waktu menjadi komponen tren + musiman + residual. '
-            'Nilai kosong diisi dengan menambahkan nilai tren (dari regresi lokal) '
-            'dengan pola musiman yang diestimasi dari data yang ada. Cocok untuk '
-            'data iklim yang memiliki pola periodik mingguan atau bulanan.'
-        ),
-    },
-    'moving_avg': {
-        'name': 'Moving Average Tertimbang (WMA)',
-        'desc': (
-            'Menghitung rata-rata tertimbang dari K titik tetangga terdekat yang '
-            'tersedia, dengan bobot berbanding terbalik terhadap jaraknya (titik '
-            'lebih dekat = bobot lebih besar). Lebih akurat dari simple moving '
-            'average karena memperhatikan kedekatan temporal titik referensi.'
-        ),
-    },
-    'regression': {
-        'name': 'Regresi Linear Lokal (LOESS)',
-        'desc': (
-            'Membangun model regresi linear dari titik-titik data dalam jendela '
-            'lokal di sekitar setiap nilai kosong. Model ini dilatih hanya pada '
-            'data terdekat (radius ±7 hari), sehingga bisa menangkap tren lokal '
-            'dengan baik tanpa terpengaruh data jauh yang mungkin memiliki pola berbeda.'
-        ),
-    },
-    'knn': {
-        'name': 'K-Nearest Neighbors (KNN)',
-        'desc': (
-            'Menemukan K data terdekat berdasarkan nilai kolom lain (fitur pendamping). '
-            'Nilai kosong diisi dengan rata-rata tertimbang dari nilai K tetangga paling '
-            'mirip secara multivariat. Algoritma ini memanfaatkan korelasi antar kolom '
-            '(misal: suhu tinggi → kelembaban rendah) untuk estimasi lebih akurat.'
-        ),
-    },
-}
+ALGO_NAME = 'Cubic Spline Interpolation'
+ALGO_DESC = (
+    'Mengisi nilai kosong menggunakan kurva kubik yang mulus yang '
+    'menghubungkan titik-titik data yang diketahui. Berbeda dengan '
+    'forward/backward fill, metode ini mempertimbangkan nilai sebelum '
+    'DAN sesudah setiap titik kosong sehingga hasil interpolasi lebih '
+    'alami dan akurat untuk data iklim deret waktu.'
+)
 
+
+# ── Data ───────────────────────────────────────────────────────────────────────
+
+def load_data():
+    """Baca CSV, kembalikan list of dict (NaN → None)."""
+    df = pd.read_csv(settings.DATA_FILE)
+    rows = df.to_dict(orient='records')
+    for row in rows:
+        for k, v in row.items():
+            if isinstance(v, float) and math.isnan(v):
+                row[k] = None
+    return rows
+
+
+# ── Algoritma Cubic Spline ─────────────────────────────────────────────────────
+
+def cubic_spline(arr):
+    """
+    Interpolasi Cubic Hermite Spline pada array 1-D.
+    - Temukan semua titik yang diketahui (bukan None).
+    - Untuk setiap celah antar dua anchor, hitung slope tangensial
+      menggunakan central-difference (atau one-sided di tepi).
+    - Evaluasi basis Hermite untuk setiap indeks kosong.
+    - Isi kepala/ekor dengan nilai anchor terdekat.
+    """
+    n = len(arr)
+    known = [{'i': i, 'v': arr[i]} for i in range(n) if arr[i] is not None]
+
+    if not known:
+        return list(arr)
+
+    result = list(arr)
+
+    for k in range(len(known) - 1):
+        i0, v0 = known[k]['i'],     known[k]['v']
+        i1, v1 = known[k + 1]['i'], known[k + 1]['v']
+        d = i1 - i0
+        if d == 1:
+            continue  # titik bersebelahan, tidak ada celah
+
+        # tangent kiri (central-diff jika bukan anchor pertama)
+        m0 = ((known[k + 1]['v'] - known[k - 1]['v']) /
+              (known[k + 1]['i'] - known[k - 1]['i'])
+              if k > 0 else (v1 - v0) / d)
+
+        # tangent kanan (central-diff jika bukan anchor terakhir)
+        m1 = ((known[k + 2]['v'] - known[k]['v']) /
+              (known[k + 2]['i'] - known[k]['i'])
+              if k < len(known) - 2 else (v1 - v0) / d)
+
+        for x in range(i0 + 1, i1):
+            t   = (x - i0) / d
+            h00 =  2*t**3 - 3*t**2 + 1
+            h10 =    t**3 - 2*t**2 + t
+            h01 = -2*t**3 + 3*t**2
+            h11 =    t**3 -   t**2
+            result[x] = h00*v0 + h10*d*m0 + h01*v1 + h11*d*m1
+
+    # padding tepi
+    for i in range(known[0]['i']):
+        result[i] = known[0]['v']
+    for i in range(known[-1]['i'] + 1, n):
+        result[i] = known[-1]['v']
+
+    return result
+
+
+def impute_all(data):
+    """
+    Terapkan cubic_spline ke semua COLUMNS.
+    Return (imputed_data, summary) di mana summary = {col: [{index, date, imputed}]}.
+    """
+    result  = [dict(row) for row in data]
+    summary = {}
+
+    for col in COLUMNS:
+        arr     = [r[col] for r in data]
+        missing = [i for i, v in enumerate(arr) if v is None]
+        filled  = cubic_spline(arr)
+
+        for i in missing:
+            result[i][col] = filled[i]
+
+        summary[col] = [
+            {'index': i, 'date': data[i]['date'], 'imputed': round(filled[i], 4)}
+            for i in missing
+        ]
+
+    return result, summary
+
+
+# ── Views ──────────────────────────────────────────────────────────────────────
 
 def index(request):
-    """Render the main dashboard page."""
-    data = load_data()
-    missing_per_col = {col: sum(1 for r in data if r[col] is None) for col in COLUMNS}
-    affected_rows   = sum(1 for r in data if any(r[c] is None for c in COLUMNS))
-    total_missing   = sum(missing_per_col.values())
-    worst_col       = max(missing_per_col, key=missing_per_col.get)
-
+    data   = load_data()
+    miss   = {col: sum(1 for r in data if r[col] is None) for col in COLUMNS}
     context = {
-        'total_rows':    len(data),
-        'total_missing': total_missing,
-        'affected_rows': affected_rows,
-        'worst_col':     worst_col,
-        'worst_count':   missing_per_col[worst_col],
-        'missing_per_col': missing_per_col,
-        'algo_meta':     ALGO_META,
-        'columns':       COLUMNS,
+        'total_rows':      len(data),
+        'total_missing':   sum(miss.values()),
+        'affected_rows':   sum(1 for r in data if any(r[c] is None for c in COLUMNS)),
+        'missing_per_col': miss,
+        'algo_name':       ALGO_NAME,
+        'algo_desc':       ALGO_DESC,
+        'columns':         COLUMNS,
     }
     return render(request, 'climate_app/index.html', context)
 
 
 def api_data(request):
-    """Return raw dataset as JSON."""
+    """GET /api/data/ — seluruh dataset mentah sebagai JSON."""
     return JsonResponse({'data': load_data()})
 
 
+@csrf_exempt
 def api_impute(request):
     """
-    POST endpoint: impute missing values for a given column using the chosen algorithm.
-    Request body: { "col": "wind_speed", "algo": "spline" }
-    Response:     { "filled": [...114 floats...], "missing_indices": [...] }
+    POST /api/impute/
+    Tidak perlu request body. Mengimputasi SEMUA kolom sekaligus.
+    Response: { data: [...], summary: {col: [...]}, total_filled: N }
     """
     if request.method != 'POST':
         return JsonResponse({'error': 'POST required'}, status=405)
 
-    try:
-        body = json.loads(request.body)
-        col  = body.get('col', 'wind_speed')
-        algo = body.get('algo', 'spline')
-    except (json.JSONDecodeError, AttributeError):
-        return JsonResponse({'error': 'Invalid JSON'}, status=400)
-
-    if col not in COLUMNS:
-        return JsonResponse({'error': f'Unknown column: {col}'}, status=400)
-    if algo not in ALGO_META:
-        return JsonResponse({'error': f'Unknown algorithm: {algo}'}, status=400)
-
-    data = load_data()
-    arr  = [r[col] for r in data]
-    missing_indices = [i for i, v in enumerate(arr) if v is None]
-
-    if algo == 'spline':
-        filled = impute_cubic_spline(arr)
-    elif algo == 'seasonal':
-        filled = impute_seasonal(arr)
-    elif algo == 'moving_avg':
-        filled = impute_weighted_moving_avg(arr)
-    elif algo == 'regression':
-        filled = impute_loess(arr)
-    elif algo == 'knn':
-        result = impute_knn(data, col)
-        filled = [r[col] for r in result]
+    data, summary = impute_all(load_data())
 
     return JsonResponse({
-        'col':             col,
-        'algo':            algo,
-        'algo_name':       ALGO_META[algo]['name'],
-        'filled':          filled,
-        'missing_indices': missing_indices,
+        'data':         data,
+        'summary':      summary,
+        'total_filled': sum(len(v) for v in summary.values()),
     })
+
+
+def api_download(request):
+    """
+    GET /api/download/
+    Menghasilkan file .xlsx berisi data yang sudah diimputasi.
+    Sel yang diisi berwarna hijau muda agar mudah dibedakan.
+    """
+    raw, summary = impute_all(load_data())
+
+    # kumpulkan koordinat sel yang diimputasi
+    imputed_cells = {
+        (entry['index'], col)
+        for col, entries in summary.items()
+        for entry in entries
+    }
+
+    # bangun DataFrame
+    df = pd.DataFrame(raw)
+    df['date'] = pd.to_datetime(df['date'])
+    for col in COLUMNS:
+        df[col] = df[col].round(4)
+
+    # tulis ke buffer Excel
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Data Lengkap')
+
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+        wb = writer.book
+        ws = writer.sheets['Data Lengkap']
+
+        # ── style helpers ──
+        FILL_HEADER  = PatternFill('solid', fgColor='1F4E79')
+        FILL_IMPUTED = PatternFill('solid', fgColor='C6EFCE')
+        FONT_HEADER  = Font(name='Calibri', bold=True, color='FFFFFF', size=11)
+        FONT_IMPUTED = Font(name='Calibri', color='276221', size=10)
+        FONT_NORMAL  = Font(name='Calibri', size=10)
+        THIN = Side(style='thin', color='D0D0D0')
+        BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+        CENTER = Alignment(horizontal='center', vertical='center')
+
+        col_map = {
+            'date':         ('A', 'Tanggal',              14),
+            'meantemp':     ('B', 'Mean Temp (°C)',        16),
+            'humidity':     ('C', 'Humidity (%)',          14),
+            'wind_speed':   ('D', 'Wind Speed (km/h)',     16),
+            'meanpressure': ('E', 'Mean Pressure (hPa)',   18),
+        }
+
+        # header row styling
+        for col_name, (letter, label, width) in col_map.items():
+            cell = ws[f'{letter}1']
+            cell.value     = label
+            cell.fill      = FILL_HEADER
+            cell.font      = FONT_HEADER
+            cell.alignment = CENTER
+            cell.border    = BORDER
+            ws.column_dimensions[letter].width = width
+
+        ws.row_dimensions[1].height = 22
+        ws.freeze_panes = 'A2'
+
+        # data rows
+        for row_idx in range(len(raw)):
+            xl_row = row_idx + 2
+            for col_name, (letter, _, _) in col_map.items():
+                cell           = ws[f'{letter}{xl_row}']
+                cell.alignment = CENTER
+                cell.border    = BORDER
+                if (row_idx, col_name) in imputed_cells:
+                    cell.fill = FILL_IMPUTED
+                    cell.font = FONT_IMPUTED
+                else:
+                    cell.font = FONT_NORMAL
+
+        # ── sheet kedua: ringkasan imputasi ──
+        ws2 = wb.create_sheet('Ringkasan Imputasi')
+        ws2.column_dimensions['A'].width = 22
+        ws2.column_dimensions['B'].width = 14
+        ws2.column_dimensions['C'].width = 14
+        ws2.column_dimensions['D'].width = 16
+
+        FILL_H2 = PatternFill('solid', fgColor='2E75B6')
+        FH2 = Font(name='Calibri', bold=True, color='FFFFFF', size=11)
+
+        # header ringkasan
+        for letter, label in zip('ABCD', ['Kolom', 'Jml Hilang', 'Sudah Diisi', 'Sisa Kosong']):
+            c = ws2[f'{letter}1']
+            c.value = label; c.fill = FILL_H2; c.font = FH2
+            c.alignment = CENTER; c.border = BORDER
+
+        for r, col in enumerate(COLUMNS, start=2):
+            filled = len(summary[col])
+            ws2[f'A{r}'].value = col
+            ws2[f'B{r}'].value = filled   # semua sudah diisi
+            ws2[f'C{r}'].value = filled
+            ws2[f'D{r}'].value = 0
+            for letter in 'ABCD':
+                c = ws2[f'{letter}{r}']
+                c.font = FONT_NORMAL; c.alignment = CENTER; c.border = BORDER
+
+        # total row
+        tr = len(COLUMNS) + 2
+        total_miss = sum(len(summary[c]) for c in COLUMNS)
+        ws2[f'A{tr}'].value = 'TOTAL'
+        ws2[f'B{tr}'].value = total_miss
+        ws2[f'C{tr}'].value = total_miss
+        ws2[f'D{tr}'].value = 0
+        for letter in 'ABCD':
+            c = ws2[f'{letter}{tr}']
+            c.font = Font(name='Calibri', bold=True, size=10)
+            c.alignment = CENTER; c.border = BORDER
+
+    buf.seek(0)
+    resp = HttpResponse(
+        buf.read(),
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+    resp['Content-Disposition'] = 'attachment; filename="delhi_climate_imputed.xlsx"'
+    return resp
